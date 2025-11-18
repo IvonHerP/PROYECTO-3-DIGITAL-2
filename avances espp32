@@ -1,0 +1,222 @@
+#include <Adafruit_NeoPixel.h>
+#include <Arduino.h>
+#include <Wire.h>
+
+// Sensor 
+#define SDA_SENSOR 21 
+#define SCL_SENSOR 22
+
+//neopixel
+#define NEOPIXEL_PIN 4
+#define NUM_PIXELS 1
+
+// comunicacion UART
+#define UART_RX 16
+#define UART_TX 17
+
+#define UART_BAUD 115200
+
+// sensores
+#define AHT10_ADDRESS 0x38
+#define AHT10_CMD_INIT    0xE1
+#define AHT10_CMD_MEASURE 0xAC
+#define AHT10_CMD_RESET   0xBA
+
+Adafruit_NeoPixel neopixel(NUM_PIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+float temperatura_actual = 0.0;
+float humedad_actual = 0.0;
+bool procesando_comando = false;
+unsigned long ultimo_comando = 0;
+const unsigned long DEBOUNCE_TIME = 1500; // esperar entre comandos
+
+HardwareSerial SerialSTM32(2);
+
+void inicializar_AHT10();
+bool leer_AHT10(float &temp, float &hum);
+void neopixel_rosa();
+void neopixel_apagado();
+void neopixel_verde();
+void neopixel_azul();
+void neopixel_rojo();
+void procesar_comando_uart();
+void enviar_datos_uart();
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  
+  // Inicializar NeoPixel
+  pinMode(NEOPIXEL_PIN, OUTPUT);
+  digitalWrite(NEOPIXEL_PIN, LOW);
+  delay(50);
+  
+  neopixel.begin();
+  neopixel.setBrightness(255);
+  neopixel.clear();
+  neopixel.show();
+  Serial.println("Neopixel");
+  
+  // Inicializar UART
+  SerialSTM32.begin(UART_BAUD, SERIAL_8N1, UART_RX, UART_TX);
+  Serial.println("UART ya");
+  
+  // Inicializar I2C
+  Wire.begin(SDA_SENSOR, SCL_SENSOR);
+  Wire.setClock(100000);
+  Serial.println("I2C ya");
+  
+  delay(100);
+  
+  // Inicializar sensor  azul incia sensor
+  neopixel_azul();
+  Serial.println("\n Inicializando sensor");
+  inicializar_AHT10();
+  delay(500);
+  
+  // Sistema listo verde es inicio
+  neopixel_verde();
+  Serial.println("Sistema listo y en espera");
+}
+
+void loop() {
+  // Solo procesar comandos UART
+  if (SerialSTM32.available() > 0 && !procesando_comando) {
+    // Verificar tiempo desde último comando (debounce)
+    if (millis() - ultimo_comando >= DEBOUNCE_TIME) {
+      procesar_comando_uart();
+    } else {
+      // Limpiar buffer 
+      while (SerialSTM32.available() > 0) {
+        SerialSTM32.read();
+      }
+    }
+  }
+  
+  delay(10);
+}
+
+void procesar_comando_uart() {
+  // Leer buffer
+  char dato_recibido = SerialSTM32.read();
+  
+  // Limpiar buffer
+  while (SerialSTM32.available() > 0) {
+    SerialSTM32.read();
+    delay(5);
+  }
+  
+  
+  procesando_comando = true;
+  
+  Serial.println("lectura del STM32");
+  
+  // Encender LED rosa
+  neopixel_rosa();
+  Serial.println("Leyendo sensor");
+  delay(100);
+  
+  // Leer sensor
+  if (leer_AHT10(temperatura_actual, humedad_actual)) {
+    // Enviar datos por UART
+    enviar_datos_uart();
+    
+    // verde = éxito
+    neopixel_verde();
+    Serial.println("Datos enviados");
+    delay(800);
+  } else {
+    //rojo = error
+    neopixel_rojo();
+    Serial.println("Error al leer sensor");
+    SerialSTM32.println("ERROR");
+    delay(800);
+  }
+
+  // Apagar LED
+  neopixel_apagado();
+  Serial.println("NEO APAGADO");
+  Serial.println("Esperando comando \n");
+  
+  ultimo_comando = millis();
+  procesando_comando = false;
+}
+
+void enviar_datos_uart() {
+  String mensaje = "T:";
+  mensaje += String(temperatura_actual, 2);
+  mensaje += ",H:";
+  mensaje += String(humedad_actual, 2);
+  
+  SerialSTM32.println(mensaje);
+  Serial.print("Temperatura: ");
+  Serial.print(temperatura_actual, 2);
+  Serial.println(" °C");
+  Serial.print(" Humedad: ");
+  Serial.print(humedad_actual, 2);
+  Serial.println(" %");
+
+}
+
+void inicializar_AHT10() {
+  Serial.println("\n nicializando Sensor");
+  
+  Wire.beginTransmission(AHT10_ADDRESS);
+  Wire.write(AHT10_CMD_RESET);
+  Wire.endTransmission();
+  delay(20);
+  Serial.println("Reset enviado");
+  
+  Wire.beginTransmission(AHT10_ADDRESS); // direccion del sensor
+  Wire.write(AHT10_CMD_INIT); // inicia el sensor
+  Wire.write(0x08);
+  Wire.write(0x00);
+  byte error = Wire.endTransmission();
+  
+  if (error == 0) {
+    Serial.println("Sensor inicializado correctamente");
+  } else {
+    Serial.print("Error en inicialización");
+    Serial.println(error);
+  }
+  
+  delay(100);
+}  
+  if (data[0] & 0x80) {
+    Serial.println("Sensor ocupado, reintente");
+    return false;
+  }
+  // extrae los datos del array y toma los de las posiciones correspondientes
+  uint32_t hum_raw = ((uint32_t)data[1] << 12) | ((uint32_t)data[2] << 4) | (data[3] >> 4);
+  uint32_t temp_raw = (((uint32_t)data[3] & 0x0F) << 16) | ((uint32_t)data[4] << 8) | data[5];
+  
+  hum = (float)hum_raw * 100.0 / 1048576.0;
+  temp = ((float)temp_raw * 200.0 / 1048576.0) - 50.0;
+  
+  return true;
+}
+
+void neopixel_rosa() {
+  neopixel.setPixelColor(0, neopixel.Color(255, 20, 147));
+  neopixel.show();
+}
+
+void neopixel_apagado() {
+  neopixel.clear();
+  neopixel.show();
+}
+
+void neopixel_verde() {
+  neopixel.setPixelColor(0, neopixel.Color(0, 255, 0));
+  neopixel.show();
+}
+
+void neopixel_azul() {
+  neopixel.setPixelColor(0, neopixel.Color(0, 0, 255));
+  neopixel.show();
+}
+
+void neopixel_rojo() {
+  neopixel.setPixelColor(0, neopixel.Color(255, 0, 0));
+  neopixel.show();
+}
